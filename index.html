@@ -3,60 +3,47 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Space Runner 3D</title>
+<title>Space Tunnel Runner - Gravity Flip</title>
 <style>
-  body, html {
-    margin: 0; padding: 0; height: 100%;
-    background: #000010;
-    overflow: hidden;
-    user-select: none;
-    touch-action: none;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  html, body {
+    margin:0; padding:0; height:100%; overflow:hidden;
+    background: radial-gradient(ellipse at center, #000011, #000000);
+    user-select:none;
+    touch-action:none;
+    font-family: Arial, sans-serif;
+    color: #0ff;
   }
   #score {
     position: absolute;
-    top: 15px;
-    left: 15px;
-    color: #00fff7;
-    font-weight: 700;
+    top: 15px; left: 15px;
     font-size: 24px;
-    text-shadow: 0 0 8px #00fff7;
-    user-select: none;
-    z-index: 20;
+    font-weight: 700;
+    text-shadow: 0 0 6px #0ff;
+    user-select:none;
+    z-index: 10;
   }
   #startScreen, #gameOverScreen {
-    position: absolute;
-    top: 0; left: 0; width: 100%; height: 100%;
+    position: absolute; top:0; left:0; width:100%; height:100%;
     background: rgba(0,0,0,0.9);
-    color: #00fff7;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
     font-size: 28px;
     font-weight: 700;
-    z-index: 30;
-    user-select: none;
+    z-index: 20;
   }
   button {
     margin-top: 20px;
     padding: 14px 36px;
     font-size: 22px;
     font-weight: 700;
-    background: #00fff7;
+    background: #0ff;
     border: none;
     border-radius: 14px;
+    color: #000;
     cursor: pointer;
-    color: #000011;
-    box-shadow: 0 0 18px #00fff7;
+    box-shadow: 0 0 12px #0ff;
     transition: background 0.3s ease;
   }
-  button:hover {
-    background: #33ffff;
-  }
-  canvas {
-    display: block;
-  }
+  button:hover { background: #33ffff; }
 </style>
 </head>
 <body>
@@ -64,368 +51,417 @@
 <div id="score">Score: 0</div>
 
 <div id="startScreen">
-  Space Runner 3D<br />
+  Space Tunnel Runner<br/>
   <button id="startBtn">Start Game</button>
-  <small style="margin-top:12px; font-weight:400; font-size:14px; color:#00fff7aa;">
-    Use arrow keys or swipe left/right to move, up arrow or tap to jump
+  <small style="margin-top:10px; font-weight:400; font-size:14px; color:#0ffaaaff; max-width:300px; text-align:center;">
+    Use left/right arrows or swipe to move around the tunnel, space/up arrow or tap to flip gravity and jump!
   </small>
 </div>
 
 <div id="gameOverScreen" style="display:none;">
-  Game Over!<br />
+  Game Over!<br/>
   <div id="finalScore"></div>
   <button id="restartBtn">Play Again</button>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.153.0/build/three.min.js"></script>
 <script>
-  let scene, camera, renderer;
-  let player, playerVelocityY = 0;
-  let platforms = [];
-  const laneCount = 3;
-  const laneWidth = 4;
-  let currentLane = 1; // 0-left,1-center,2-right
+(() => {
+  // --- Scene Setup ---
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x000011, 0.08);
+
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 4, 10);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000011);
+  document.body.appendChild(renderer.domElement);
+
+  // --- Lighting ---
+  const ambientLight = new THREE.AmbientLight(0x0ff, 0.6);
+  scene.add(ambientLight);
+
+  const pointLight = new THREE.PointLight(0x0ff, 1.8, 50);
+  pointLight.position.set(0, 10, 10);
+  scene.add(pointLight);
+
+  // --- Tunnel parameters ---
+  const tunnelRadius = 6;
+  const tunnelSegments = 20; // number of sections around the tunnel
+  const segmentLength = 4;
+  const totalSections = 40;  // how many sections in length
+
+  // --- Player ---
+  const playerRadius = 0.6;
+  let playerAngle = 0;       // position angle around tunnel (radians)
+  let playerSegment = 0;     // z position index (which section along length)
+  let playerYFlip = 1;       // 1 means running on bottom, -1 means running on ceiling (gravity flip)
+  let playerJumpVel = 0;
+  const gravity = 0.08;
+  const jumpPower = 0.8;
   let isJumping = false;
 
-  let forwardSpeed = 0.15;
-  let gravity = 0.02;
-  let jumpForce = 0.5;
+  // Player mesh (glowing sphere)
+  const playerGeo = new THREE.SphereGeometry(playerRadius, 24, 24);
+  const playerMat = new THREE.MeshStandardMaterial({
+    color: 0x00ffff,
+    emissive: 0x00ffff,
+    emissiveIntensity: 1.2,
+    metalness: 0.9,
+    roughness: 0.1
+  });
+  const playerMesh = new THREE.Mesh(playerGeo, playerMat);
+  scene.add(playerMesh);
 
+  // --- Tunnel segments (platforms) ---
+  // We'll create a grid of small boxes around the tunnel ring per section
+  // Some boxes are missing (gaps)
+  // The tunnel runs infinitely forward by cycling segments
+
+  let tunnelSegmentsMeshes = []; // array of sections, each with lane blocks
+
+  // Function to create one tunnel section at position index (along z axis)
+  function createTunnelSection(zIndex) {
+    const group = new THREE.Group();
+    group.position.z = -zIndex * segmentLength;
+
+    // Around tunnel circle: divide 20 segments
+    for(let i=0; i<tunnelSegments; i++) {
+      // For each segment, create a block or gap randomly
+
+      // 40% chance to be gap (missing block)
+      if(Math.random() < 0.4) continue;
+
+      // Calculate block position on circle
+      let angle = (i / tunnelSegments) * Math.PI * 2;
+
+      // Block size
+      let blockLength = segmentLength;
+      let blockHeight = 1.2;
+      let blockWidth = (2 * Math.PI * tunnelRadius) / tunnelSegments * 0.9;
+
+      const geo = new THREE.BoxGeometry(blockWidth, blockHeight, blockLength);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x004444,
+        emissive: 0x006666,
+        emissiveIntensity: 0.9,
+        metalness: 0.7,
+        roughness: 0.4
+      });
+
+      const block = new THREE.Mesh(geo, mat);
+
+      // Position block around circle
+      block.position.x = Math.cos(angle) * tunnelRadius;
+      block.position.y = Math.sin(angle) * tunnelRadius * playerYFlip; // Y position depends on gravity flip
+      block.position.z = 0;
+
+      // Rotate block so length follows tunnel axis (z)
+      block.rotation.z = angle + (playerYFlip === 1 ? 0 : Math.PI);
+
+      group.add(block);
+    }
+    scene.add(group);
+    return group;
+  }
+
+  // Create initial tunnel sections
+  for(let i=0; i<totalSections; i++) {
+    tunnelSegmentsMeshes.push(createTunnelSection(i));
+  }
+
+  // --- Background stars ---
+  const starGeo = new THREE.BufferGeometry();
+  const starCount = 600;
+  const starPositions = [];
+  for(let i=0; i<starCount; i++) {
+    starPositions.push(
+      (Math.random()-0.5)*60,
+      (Math.random()-0.5)*60,
+      (Math.random()-0.5)*200 - 10
+    );
+  }
+  starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPositions, 3));
+  const starMat = new THREE.PointsMaterial({color: 0x00ffff, size: 0.1, opacity:0.7, transparent:true});
+  const stars = new THREE.Points(starGeo, starMat);
+  scene.add(stars);
+
+  // --- Controls ---
+  let leftPressed = false;
+  let rightPressed = false;
+  let jumpPressed = false;
+
+  window.addEventListener('keydown', e=>{
+    if(e.code === 'ArrowLeft') leftPressed = true;
+    if(e.code === 'ArrowRight') rightPressed = true;
+    if(e.code === 'ArrowUp' || e.code === 'Space') jumpPressed = true;
+  });
+  window.addEventListener('keyup', e=>{
+    if(e.code === 'ArrowLeft') leftPressed = false;
+    if(e.code === 'ArrowRight') rightPressed = false;
+    if(e.code === 'ArrowUp' || e.code === 'Space') jumpPressed = false;
+  });
+
+  // Touch controls (swipe)
+  let touchStartX = null;
+  let touchStartY = null;
+  window.addEventListener('touchstart', e=>{
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  });
+  window.addEventListener('touchend', e=>{
+    if(touchStartX === null || touchStartY === null) return;
+    let dx = e.changedTouches[0].clientX - touchStartX;
+    let dy = e.changedTouches[0].clientY - touchStartY;
+
+    if(Math.abs(dx) > Math.abs(dy)){
+      if(dx > 30) {
+        rightPressed = true;
+        setTimeout(() => rightPressed = false, 100);
+      }
+      else if(dx < -30){
+        leftPressed = true;
+        setTimeout(() => leftPressed = false, 100);
+      }
+    } else {
+      if(dy < -30){
+        jumpPressed = true;
+        setTimeout(() => jumpPressed = false, 150);
+      }
+    }
+    touchStartX = null;
+    touchStartY = null;
+  });
+
+  // --- Game state ---
   let score = 0;
-  let scoreDisplay = document.getElementById('score');
+  const scoreEl = document.getElementById('score');
+
+  let currentAngleIndex = 0; // Player position index around the circle (0 to tunnelSegments-1)
+  let zPos = 0;              // forward progress (distance)
+  let velocityZ = 0.15;      // forward speed
+
+  // Player jump state
+  let verticalOffset = 0;    // player offset up/down from floor/ceiling
+  let verticalVelocity = 0;
+  let gravityDir = 1;        // 1 = on floor, -1 = on ceiling
+
+  // Helper: clamp angle index around tunnelSegments
+  function clampAngleIndex(idx) {
+    if(idx < 0) return tunnelSegments -1;
+    if(idx >= tunnelSegments) return 0;
+    return idx;
+  }
+
+  // --- Start & game over UI ---
+  const startScreen = document.getElementById('startScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+  const finalScoreEl = document.getElementById('finalScore');
+  const startBtn = document.getElementById('startBtn');
+  const restartBtn = document.getElementById('restartBtn');
 
   let gameRunning = false;
 
-  let clock = new THREE.Clock();
+  function startGame(){
+    score = 0;
+    zPos = 0;
+    currentAngleIndex = Math.floor(tunnelSegments/2);
+    verticalOffset = 0;
+    verticalVelocity = 0;
+    gravityDir = 1;
+    playerJumpVel = 0;
+    isJumping = false;
 
-  const platformLength = 10;
-  const platformWidth = laneWidth * laneCount;
-  const platformHeight = 1;
-
-  const platformGapChance = 0.3; // chance to have a gap in lane per platform
-
-  const platformsToKeep = 15;
-
-  const startScreen = document.getElementById('startScreen');
-  const startBtn = document.getElementById('startBtn');
-  const gameOverScreen = document.getElementById('gameOverScreen');
-  const finalScore = document.getElementById('finalScore');
-  const restartBtn = document.getElementById('restartBtn');
-
-  // Initialize Three.js scene
-  function init() {
-    scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x000010, 0.07);
-
-    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 6, 12);
-    camera.lookAt(0, 0, 0);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x000010);
-    document.body.appendChild(renderer.domElement);
-
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
-    scene.add(ambientLight);
-    const pointLight = new THREE.PointLight(0x00fff7, 2, 50);
-    pointLight.position.set(0, 10, 10);
-    scene.add(pointLight);
-
-    // Player - glowing cube
-    const playerGeometry = new THREE.BoxGeometry(1.8, 1.8, 1.8);
-    const playerMaterial = new THREE.MeshStandardMaterial({
-      color: 0x00fff7,
-      emissive: 0x00fff7,
-      emissiveIntensity: 1,
-      metalness: 0.8,
-      roughness: 0.2
-    });
-    player = new THREE.Mesh(playerGeometry, playerMaterial);
-    player.position.set(0, 1, 0);
-    scene.add(player);
-
-    // Create initial platforms
-    for (let i = 0; i < platformsToKeep; i++) {
-      addPlatform(i * platformLength);
+    // Reset tunnel segments
+    tunnelSegmentsMeshes.forEach(group => scene.remove(group));
+    tunnelSegmentsMeshes = [];
+    for(let i=0; i<totalSections; i++) {
+      tunnelSegmentsMeshes.push(createTunnelSection(i));
     }
 
-    // Add neon tunnel effect - rings
-    for (let i = 0; i < 40; i++) {
-      let ringGeometry = new THREE.TorusGeometry(7, 0.1, 16, 100);
-      let ringMaterial = new THREE.MeshBasicMaterial({ color: 0x00fff7, transparent: true, opacity: 0.1 });
-      let ring = new THREE.Mesh(ringGeometry, ringMaterial);
-      ring.position.z = -i * 3;
-      scene.add(ring);
-    }
+    startScreen.style.display = 'none';
+    gameOverScreen.style.display = 'none';
+    gameRunning = true;
 
-    window.addEventListener('resize', onWindowResize, false);
-    window.addEventListener('keydown', onKeyDown, false);
-    window.addEventListener('keyup', onKeyUp, false);
-    initTouchControls();
+    animate();
   }
 
-  // Platform class
-  class Platform {
-    constructor(zPos) {
-      this.group = new THREE.Group();
-      this.z = zPos;
+  function endGame(){
+    gameRunning = false;
+    finalScoreEl.textContent = "Your Score: " + Math.floor(score);
+    gameOverScreen.style.display = 'flex';
+  }
 
-      this.lanes = [];
-      for (let lane = 0; lane < laneCount; lane++) {
-        if (Math.random() < platformGapChance) {
-          // gap - skip creating platform for this lane
-          this.lanes.push(null);
-          continue;
+  // --- Collision detection ---
+  // Check if player stands on a block (platform)
+  function checkCollision(angleIndex, zIndex) {
+    if(zIndex < 0 || zIndex >= totalSections) return false;
+    const section = tunnelSegmentsMeshes[zIndex];
+    if(!section) return false;
+    // Check if block exists at angleIndex in this section
+    // The blocks are positioned around the circle, some are missing
+    // Because we created blocks skipping some randomly, we can check children
+
+    // Each child corresponds to a block at some angle:
+    for(const block of section.children) {
+      // Calculate block angle from block.rotation.z
+      // block.rotation.z is angle + PI if ceiling
+      let blockAngle = block.rotation.z;
+      if(gravityDir === -1) blockAngle -= Math.PI;
+      // Normalize angles between 0 to 2PI
+      blockAngle = (blockAngle + Math.PI*2) % (Math.PI*2);
+
+      // Target angle for player:
+      let targetAngle = (angleIndex / tunnelSegments) * Math.PI*2;
+
+      // Check if angles match within a block's arc segment width:
+      const arcPerBlock = (Math.PI*2)/tunnelSegments;
+      if(Math.abs(blockAngle - targetAngle) < arcPerBlock * 0.5){
+        // Check if player's vertical position is close to block surface
+        // Block surface is at radius = tunnelRadius * gravityDir
+        // Player position radius:
+        let playerRadiusPos = tunnelRadius + verticalOffset*gravityDir;
+
+        // Allow tolerance of 0.8 for "standing"
+        if(playerRadiusPos > tunnelRadius - 0.7 && playerRadiusPos < tunnelRadius + 0.7){
+          return true;
         }
-        let geometry = new THREE.BoxGeometry(laneWidth, platformHeight, platformLength);
-        let material = new THREE.MeshStandardMaterial({
-          color: 0x002f3e,
-          emissive: 0x004d66,
-          emissiveIntensity: 0.8,
-          metalness: 0.5,
-          roughness: 0.4
-        });
-        let block = new THREE.Mesh(geometry, material);
-        block.position.set((lane - 1) * laneWidth, 0, zPos);
-        this.group.add(block);
-        this.lanes.push(block);
       }
-      scene.add(this.group);
     }
+    return false;
+  }
 
-    move(dz) {
-      this.group.position.z += dz;
-      this.z += dz;
-    }
+  // --- Animate & game loop ---
+  function animate(){
+    if(!gameRunning) return;
 
-    dispose() {
-      this.lanes.forEach(block => {
-        if (block) {
-          this.group.remove(block);
-          block.geometry.dispose();
-          block.material.dispose();
-        }
+    // Move tunnel forward
+    zPos += velocityZ;
+
+    // Shift tunnel segments so player always near index 0
+    // Recycle segments behind
+    if(zPos > segmentLength){
+      zPos -= segmentLength;
+      // Remove oldest segment
+      const old = tunnelSegmentsMeshes.shift();
+      scene.remove(old);
+      // Add new segment at front
+      const newIndex = tunnelSegmentsMeshes.length > 0 ? tunnelSegmentsMeshes[tunnelSegmentsMeshes.length - 1].position.z - segmentLength : 0;
+      tunnelSegmentsMeshes.push(createTunnelSection(tunnelSegmentsMeshes.length));
+      // Shift all segments forward
+      tunnelSegmentsMeshes.forEach((group,i) => {
+        group.position.z = -i * segmentLength;
       });
-      scene.remove(this.group);
     }
-  }
 
-  let platformObjects = [];
-
-  function addPlatform(zPos) {
-    let p = new Platform(zPos);
-    platformObjects.push(p);
-  }
-
-  function removePlatform(p) {
-    p.dispose();
-    platformObjects = platformObjects.filter(obj => obj !== p);
-  }
-
-  // Game variables
-  let moveLeft = false;
-  let moveRight = false;
-  let jump = false;
-
-  let jumpVelocity = 0;
-  let isPlayerJumping = false;
-
-  // Player lane position (0,1,2)
-  function setPlayerLane(lane) {
-    currentLane = Math.min(Math.max(lane, 0), laneCount - 1);
-  }
-
-  // Controls
-  function onKeyDown(e) {
-    if (!gameRunning) return;
-    switch (e.code) {
-      case 'ArrowLeft': moveLeft = true; break;
-      case 'ArrowRight': moveRight = true; break;
-      case 'ArrowUp':
-      case 'Space': jump = true; break;
+    // Handle left/right input to move around tunnel circle
+    if(leftPressed) {
+      currentAngleIndex--;
+      if(currentAngleIndex < 0) currentAngleIndex = tunnelSegments -1;
+      leftPressed = false;
     }
-  }
-
-  function onKeyUp(e) {
-    switch (e.code) {
-      case 'ArrowLeft': moveLeft = false; break;
-      case 'ArrowRight': moveRight = false; break;
-      case 'ArrowUp':
-      case 'Space': jump = false; break;
+    if(rightPressed){
+      currentAngleIndex++;
+      if(currentAngleIndex >= tunnelSegments) currentAngleIndex = 0;
+      rightPressed = false;
     }
-  }
 
-  // Touch controls (swipe left/right/up)
-  let touchStartX = null;
-  let touchStartY = null;
-  function initTouchControls() {
-    window.addEventListener('touchstart', e => {
-      if (!gameRunning) return;
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-    });
-    window.addEventListener('touchend', e => {
-      if (!gameRunning) return;
-      if (touchStartX === null || touchStartY === null) return;
-      let dx = e.changedTouches[0].clientX - touchStartX;
-      let dy = e.changedTouches[0].clientY - touchStartY;
+    // Handle jump / gravity flip
+    if(jumpPressed && !isJumping){
+      isJumping = true;
+      verticalVelocity = jumpPower * gravityDir;
+      gravityDir *= -1; // flip gravity on jump
+      jumpPressed = false;
+    }
 
-      if (Math.abs(dx) > Math.abs(dy)) {
-        if (dx > 40) {
-          // swipe right
-          moveRight = true;
-          moveLeft = false;
-          setTimeout(() => moveRight = false, 100);
-        } else if (dx < -40) {
-          // swipe left
-          moveLeft = true;
-          moveRight = false;
-          setTimeout(() => moveLeft = false, 100);
-        }
-      } else {
-        if (dy < -40) {
-          // swipe up
-          jump = true;
-          setTimeout(() => jump = false, 150);
-        }
-      }
+    // Apply gravity and vertical velocity
+    if(isJumping){
+      verticalVelocity -= gravity * gravityDir;
+      verticalOffset += verticalVelocity;
 
-      touchStartX = null;
-      touchStartY = null;
-    });
-  }
-
-  // Game loop
-  function animate() {
-    if (!gameRunning) return;
-
-    // Move platforms toward player
-    platformObjects.forEach(p => p.move(forwardSpeed));
-
-    // Remove platforms behind player and add new platforms
-    if (platformObjects.length > 0) {
-      if (platformObjects[0].z > 10) {
-        removePlatform(platformObjects[0]);
-        addPlatform(platformObjects[platformObjects.length - 1].z - platformLength);
+      // Check if landed (verticalOffset crossed zero in direction of gravity)
+      if(gravityDir === 1 && verticalOffset <= 0){
+        verticalOffset = 0;
+        verticalVelocity = 0;
+        isJumping = false;
+      } else if(gravityDir === -1 && verticalOffset >= 0){
+        verticalOffset = 0;
+        verticalVelocity = 0;
+        isJumping = false;
       }
     }
 
-    // Player lateral movement smooth
-    let targetX = (currentLane - 1) * laneWidth;
-    player.position.x += (targetX - player.position.x) * 0.2;
+    // Update player position in 3D:
+    const angleRad = (currentAngleIndex / tunnelSegments) * Math.PI * 2;
+    const radiusPos = tunnelRadius + verticalOffset * gravityDir;
+    playerMesh.position.set(
+      Math.cos(angleRad) * radiusPos,
+      Math.sin(angleRad) * radiusPos * gravityDir,
+      1 // keep player slightly ahead on z for visibility
+    );
 
-    // Player jump physics
-    if (isPlayerJumping) {
-      playerVelocityY -= gravity;
-      player.position.y += playerVelocityY;
+    // Rotate player so it "stands" on floor or ceiling
+    playerMesh.rotation.z = angleRad + (gravityDir === 1 ? 0 : Math.PI);
 
-      if (player.position.y <= 1) {
-        player.position.y = 1;
-        isPlayerJumping = false;
-        playerVelocityY = 0;
-      }
-    } else if (jump && !isPlayerJumping) {
-      // start jump
-      isPlayerJumping = true;
-      playerVelocityY = jumpForce;
+    // Collision detection: is player on a platform?
+    // Player "forward" section:
+    let playerZIndex = Math.floor(zPos / segmentLength);
+    let onPlatform = checkCollision(currentAngleIndex, playerZIndex);
+
+    // If not on platform and not jumping => game over
+    if(!onPlatform && !isJumping){
+      endGame();
+      return;
     }
 
-    // Collision detection: Check if player is on platform or fell
-    if (!isPlayerJumping) {
-      // Check if there's platform under player lane at z=0
-      let platformBelow = false;
-      for (let p of platformObjects) {
-        let localZ = p.z + p.group.position.z;
-        if (localZ > -platformLength && localZ < platformLength) {
-          let laneBlock = p.lanes[currentLane];
-          if (laneBlock) {
-            platformBelow = true;
-            break;
-          }
-        }
-      }
-      if (!platformBelow) {
-        // Player falls: game over
-        endGame();
-        return;
-      }
-    }
+    // Update score
+    score += velocityZ * 15;
+    scoreEl.textContent = "Score: " + Math.floor(score);
 
-    // Increase score by distance
-    score += forwardSpeed * 10;
-    scoreDisplay.textContent = 'Score: ' + Math.floor(score);
+    // Slowly increase speed every 100 points, max at 0.3
+    if(score > 100) velocityZ = 0.18;
+    if(score > 200) velocityZ = 0.22;
+    if(score > 400) velocityZ = 0.26;
+    if(score > 600) velocityZ = 0.3;
+
+    // Animate stars to move backward (simulate flying)
+    stars.position.z += velocityZ * 0.5;
+    if(stars.position.z > 10) stars.position.z -= 100;
 
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
   }
 
-  function startGame() {
-    // Reset everything
-    score = 0;
-    scoreDisplay.textContent = 'Score: 0';
-    gameRunning = true;
+  // --- UI Controls ---
+  const scoreDiv = document.getElementById('score');
+  const startDiv = document.getElementById('startScreen');
+  const gameOverDiv = document.getElementById('gameOverScreen');
+  const finalScoreDiv = document.getElementById('finalScore');
+  const startButton = document.getElementById('startBtn');
+  const restartButton = document.getElementById('restartBtn');
 
-    // Reset player
-    player.position.set(0, 1, 0);
-    setPlayerLane(1);
-    isPlayerJumping = false;
-    playerVelocityY = 0;
+  startButton.onclick = () => {
+    startDiv.style.display = 'none';
+    gameOverDiv.style.display = 'none';
+    startGame();
+  };
+  restartButton.onclick = () => {
+    startDiv.style.display = 'none';
+    gameOverDiv.style.display = 'none';
+    startGame();
+  };
 
-    // Remove old platforms
-    platformObjects.forEach(p => p.dispose());
-    platformObjects = [];
-
-    // Add new platforms
-    for (let i = 0; i < platformsToKeep; i++) {
-      addPlatform(-i * platformLength);
-    }
-
-    startScreen.style.display = 'none';
-    gameOverScreen.style.display = 'none';
-
-    animate();
-  }
-
-  function endGame() {
-    gameRunning = false;
-    finalScore.textContent = 'Your Score: ' + Math.floor(score);
-    gameOverScreen.style.display = 'flex';
-  }
-
-  startBtn.onclick = startGame;
-  restartBtn.onclick = startGame;
-
-  // Handle lane change on key press
-  function updateLane() {
-    if (moveLeft) {
-      setPlayerLane(currentLane - 1);
-      moveLeft = false;
-    }
-    if (moveRight) {
-      setPlayerLane(currentLane + 1);
-      moveRight = false;
-    }
-  }
-
-  function gameUpdate() {
-    if (!gameRunning) return;
-    updateLane();
-    setTimeout(gameUpdate, 100); // slow lane change update for smoothness
-  }
-
-  // Initialize everything and start update loop
-  init();
-  gameUpdate();
-
-  // Resize handler
-  function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
+  // --- Resize handler ---
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
     camera.updateProjectionMatrix();
-
     renderer.setSize(window.innerWidth, window.innerHeight);
-  }
+  });
+
+})();
 </script>
 
 </body>
