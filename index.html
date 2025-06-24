@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gravity Flip Runner</title>
+  <style>
+    /* Reset & styling */
+    body, html {
+      margin: 0; padding: 0; height: 100%;
+      background: linear-gradient(135deg, #120078, #0f0c29);
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      user-select: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #gameContainer {
+      position: relative;
+      width: 420px;
+      max-width: 100vw;
+      height: 700px;
+      max-height: 100vh;
+      background: #0f172a;
+      border-radius: 20px;
+      box-shadow: 0 0 20px #00fff7;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      background: #1e293b;
+      border-radius: 20px;
+      margin: 0 auto;
+    }
+    #score {
+      position: absolute;
+      top: 15px; left: 15px;
+      font-weight: 700;
+      font-size: 24px;
+      color: #00fff7;
+      text-shadow: 0 0 8px #00fff7;
+      user-select: none;
+      font-family: monospace;
+    }
+    #startScreen, #gameOverScreen {
+      position: absolute;
+      width: 100%; height: 100%;
+      background: rgba(15,23,43,0.95);
+      color: #00fff7;
+      font-weight: 700;
+      font-size: 28px;
+      border-radius: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      user-select: none;
+    }
+    button {
+      margin-top: 20px;
+      background: #00fff7;
+      border: none;
+      color: #0f172a;
+      font-size: 22px;
+      padding: 14px 32px;
+      border-radius: 14px;
+      cursor: pointer;
+      font-weight: 700;
+      box-shadow: 0 0 18px #00fff7;
+      transition: background 0.3s ease;
+    }
+    button:hover {
+      background: #33ffff;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="score">Score: 0</div>
+
+    <div id="startScreen">
+      Gravity Flip Runner<br />
+      <button id="startBtn">Start Game</button>
+      <small style="margin-top:10px; font-weight:400; font-size:14px; color:#0ff9ffbb;">
+        Tap or press spacebar to flip gravity
+      </small>
+    </div>
+
+    <div id="gameOverScreen" style="display:none;">
+      Game Over!<br />
+      <div id="finalScore"></div>
+      <button id="restartBtn">Play Again</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('score');
+    const startScreen = document.getElementById('startScreen');
+    const startBtn = document.getElementById('startBtn');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const finalScore = document.getElementById('finalScore');
+
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+
+    // Player properties
+    const PLAYER_WIDTH = 40;
+    const PLAYER_HEIGHT = 60;
+    const PLAYER_X = 60;
+
+    // Obstacle properties
+    const OBSTACLE_WIDTH = 40;
+    const OBSTACLE_MIN_HEIGHT = 60;
+    const OBSTACLE_MAX_HEIGHT = 160;
+    const OBSTACLE_GAP_MIN = 200;
+    const OBSTACLE_GAP_MAX = 350;
+
+    let playerY, velocityY;
+    let gravityDown = true;
+    let gameRunning = false;
+
+    let obstacles = [];
+    let obstacleSpeed = 4;
+
+    let score = 0;
+    let lastTimestamp = 0;
+    let obstacleTimer = 0;
+    let obstacleGap = 250;
+
+    // Initialize player position on ground
+    function resetGame() {
+      playerY = HEIGHT - PLAYER_HEIGHT - 10;
+      velocityY = 0;
+      gravityDown = true;
+      obstacles = [];
+      score = 0;
+      obstacleSpeed = 4;
+      obstacleGap = 250;
+      obstacleTimer = 0;
+      scoreDisplay.textContent = "Score: 0";
+    }
+
+    function drawPlayer() {
+      ctx.fillStyle = '#00fff7';
+      ctx.shadowColor = '#00fff7';
+      ctx.shadowBlur = 12;
+      ctx.fillRect(PLAYER_X, playerY, PLAYER_WIDTH, PLAYER_HEIGHT);
+      ctx.shadowBlur = 0;
+    }
+
+    function drawObstacle(obs) {
+      ctx.fillStyle = '#ff0055';
+      ctx.shadowColor = '#ff0055';
+      ctx.shadowBlur = 8;
+      ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+      ctx.shadowBlur = 0;
+    }
+
+    function addObstacle() {
+      // Random height and position (top or bottom)
+      const height = OBSTACLE_MIN_HEIGHT + Math.random() * (OBSTACLE_MAX_HEIGHT - OBSTACLE_MIN_HEIGHT);
+      const fromTop = Math.random() < 0.5;
+
+      let y = fromTop ? 10 : HEIGHT - height - 10;
+
+      obstacles.push({
+        x: WIDTH,
+        y: y,
+        width: OBSTACLE_WIDTH,
+        height: height,
+        fromTop: fromTop
+      });
+    }
+
+    function flipGravity() {
+      gravityDown = !gravityDown;
+      // Immediately position player on floor or ceiling
+      playerY = gravityDown ? (HEIGHT - PLAYER_HEIGHT - 10) : 10;
+      velocityY = 0;
+    }
+
+    function updatePlayer(delta) {
+      // Player is always running forward on X, no horizontal movement needed
+      // We can animate a little bounce if you want, but keep it simple
+
+      // Gravity is flipped instantly on input, no physics needed
+      // So playerY stays at floor or ceiling
+
+      // But let's add a slight bobbing animation:
+      const bobbingSpeed = 0.005;
+      const bobbingAmount = 5;
+      let baseY = gravityDown ? (HEIGHT - PLAYER_HEIGHT - 10) : 10;
+      playerY = baseY + Math.sin(Date.now() * bobbingSpeed) * bobbingAmount;
+    }
+
+    function updateObstacles(delta) {
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].x -= obstacleSpeed;
+
+        // Remove obstacles that have gone off screen
+        if (obstacles[i].x + obstacles[i].width < 0) {
+          obstacles.splice(i, 1);
+          score++;
+          scoreDisplay.textContent = "Score: " + score;
+
+          // Speed up and shorten gap every 5 points to increase difficulty
+          if (score % 5 === 0) {
+            obstacleSpeed += 0.5;
+            obstacleGap = Math.max(150, obstacleGap - 20);
+          }
+        }
+      }
+    }
+
+    function checkCollision() {
+      // Player rectangle
+      let px = PLAYER_X;
+      let py = playerY;
+      let pw = PLAYER_WIDTH;
+      let ph = PLAYER_HEIGHT;
+
+      for (const obs of obstacles) {
+        // Obstacle rectangle
+        let ox = obs.x;
+        let oy = obs.y;
+        let ow = obs.width;
+        let oh = obs.height;
+
+        if (px < ox + ow &&
+            px + pw > ox &&
+            py < oy + oh &&
+            py + ph > oy) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function gameLoop(timestamp) {
+      if (!gameRunning) return;
+
+      if (!lastTimestamp) lastTimestamp = timestamp;
+      const delta = timestamp - lastTimestamp;
+      lastTimestamp = timestamp;
+
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+      updatePlayer(delta);
+      updateObstacles(delta);
+
+      drawPlayer();
+      obstacles.forEach(drawObstacle);
+
+      // Add new obstacles periodically based on gap timer
+      obstacleTimer += delta;
+      if (obstacleTimer > obstacleGap) {
+        addObstacle();
+        obstacleTimer = 0;
+      }
+
+      if (checkCollision()) {
+        endGame();
+        return;
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function startGame() {
+      resetGame();
+      startScreen.style.display = 'none';
+      gameOverScreen.style.display = 'none';
+      gameRunning = true;
+      lastTimestamp = 0;
+      requestAnimationFrame(gameLoop);
+    }
+
+    function endGame() {
+      gameRunning = false;
+      finalScore.textContent = "Your Score: " + score;
+      gameOverScreen.style.display = 'flex';
+    }
+
+    // Input handlers: tap or spacebar flips gravity
+    function inputFlip() {
+      if (!gameRunning) return;
+      flipGravity();
+    }
+
+    window.addEventListener('keydown', e => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        inputFlip();
+      }
+    });
+
+    window.addEventListener('touchstart', e => {
+      e.preventDefault();
+      inputFlip();
+    }, { passive: false });
+
+    startBtn.onclick = startGame;
+    restartBtn.onclick = startGame;
+  </script>
+</body>
+</html>
